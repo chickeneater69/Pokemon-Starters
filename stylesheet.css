@@ -1,0 +1,45 @@
+body {
+    background-color: cyan;
+}
+    
+
+
+
+img {
+    border-radius: 50%;
+    width: 50%;
+    height: 25%;
+    border-width: 1px;
+    border-style: solid;
+    border-color: black;
+    display: block;
+    margin-left: 25%;
+    margin-right: 25%;
+}
+#navlinks{
+    text-align: left;
+    position: fixed;
+}
+    #header {
+    text-align: center;
+    background-color: red;
+    border-radius: 5px;
+    border-width: 10px;
+    border-style: dotted;
+    }
+    #list{
+        text-align: right;
+        border-width: 1px;
+        border-style: solid;
+        border-color: black;
+        padding: 15px;
+        margin-left: 35%;
+    }
+    #footer{
+        background-color: red;
+        border-width: 10px;
+        border-radius: 5px;
+        border-style: dashed;
+        text-align: center;
+    }
+

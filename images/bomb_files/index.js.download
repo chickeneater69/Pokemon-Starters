@@ -1,0 +1,970 @@
+// Global variables
+let currentPage = 0; // Current page (replace with a call for most recent page?)
+let maxPages; // How many pages are in this document (set in function below)
+let pageChange = 0; // Used to know if we are changing pages, and determines which direction we are going
+let pages = []; // To hold the whole page element
+let pageNums = []; // To hold individual pagination links
+let pagesToShow = 5; // How many page numbers to show at a time
+
+// Initial position of the first page (set in the "firstRun" function)
+let leftPos;
+let topPos;
+
+let isStaff;
+
+function firstRun(staff) {
+
+    // Hide the "Loading" bar
+    document.getElementById("loading").style.display = "none";
+
+    isStaff = staff;
+
+    // How many pages?
+    pages = document.getElementsByClassName("Page");
+    maxPages = pages.length - 1;
+
+    // Check if a 'page' parameter is present
+    var getSearch = window.location.search;
+    var getParams = new URLSearchParams(getSearch);
+
+    // If so, change the current page on what we show in the beginning
+    if (getParams.has('page')) {
+        currentPage = parseInt(getParams.get('page'));
+    }
+
+    // Display current page (default is 1)
+    pages[currentPage].style.display = "block";
+
+    // Populate with the questions in the "multiple_choice" pages
+    getQuestions();
+
+    // Add an event listener to the "answer" button (if exists)
+    //// This is to fix a bug if the student saves on a concept checkpoint that the onclick wasn't set
+    var answerButton = pages[currentPage].querySelector("#answer");
+    if (answerButton != null) {
+        answerButton.onclick = checkAnswer;
+    }
+
+    // Add an event listener to the "respond" button (if exists)
+    //// This is to fix a bug if the student saves on the "End Of Project"... the onclick wasn't set
+    var respondButton = pages[currentPage].querySelector("#respond");
+    if (respondButton != null) {
+        respondButton.onclick = submitResponse;
+    }
+
+    // Add an event listener to the "See Answer" button (if exists).
+    //// This is for open-ended checkpoints (for instructors) example challenges, actual challenges (for instructors), and finals (for instructors).
+    var seeAnswerButton = pages[currentPage].querySelector("#seeAnswer");
+    if (seeAnswerButton != null) {
+        seeAnswerButton.onclick = showAnswer;
+    }
+
+    // Create the pagination
+    updatePagination();
+
+    // Set up "text to speech" for current page
+    textToSpeech();
+
+    // Set listener for all pages to check when an animation ends, and then do something appropriately
+    for (var i = 0; i < pages.length; i++) {
+        pages[i].addEventListener("animationend", function () {
+            // Add an event listener to the "answer" button (if exists)
+            var answerButton = pages[currentPage].querySelector("#answer");
+            if (answerButton != null) {
+                answerButton.onclick = checkAnswer;
+            }
+
+            // Make sure that it is the old page and not the new page
+            //// (They both just went through an animation, we don't want both pages disappearing)
+            if (pages[currentPage + pageChange].getAttribute("data-change") == "yes") {
+                // Hide the old page (we use "pageChange" to go in the direction of the old page)
+                pages[currentPage + pageChange].style.display = "none";
+                pages[currentPage].style.position = "static"; // "Static" so that the page is where it's supposed to be in the page
+                pages[currentPage + pageChange].setAttribute("data-change", "no"); // Reset back to not changing
+                document.getElementById("currentPageDisplay").innerHTML = currentPage + pageChange;
+                pageChange = 0; // Reset so we can change the page again
+            }
+        });
+    }
+
+    // Event handler for when the "previous" button is pressed
+    document.getElementById("previous").addEventListener("click", function () {
+        // Make sure we are not on the first page or are in the middle of a page change
+        if (currentPage > 0 && pageChange == 0) {
+            // Change to new page
+            changePage(currentPage - 1, false);
+        }
+    });
+
+    // Event handler for when the "next" button is pressed (nearly identical code to event handler above)
+    document.getElementById("next").addEventListener("click", function () {
+        // Make sure we are not on the last page or are in the middle of a page change
+        if (currentPage < maxPages && pageChange == 0) {
+            // Also make sure that if there is a concept checkpoint that they answer it first
+            var conceptDone;
+            var afterCheckpoint = pages[currentPage].querySelector("#AfterCheckpoint");
+            if (afterCheckpoint != null && window.getComputedStyle(afterCheckpoint).getPropertyValue("display") == "none") {
+                conceptDone = false;
+            } else {
+                conceptDone = true;
+            }
+
+            var openEndedConcept = false;
+            if (pages[currentPage].getAttribute("data-open") == "yes") {
+                openEndedConcept = true;
+            }
+
+            if ((conceptDone && !openEndedConcept) || isStaff == true) {
+                // Make sure we are not on the last page
+                if (currentPage < maxPages) {
+                    // Change to new page
+                    changePage(currentPage + 1, false);
+                }
+            }
+            else if (!conceptDone) {
+                Swal.fire({
+                    icon: 'info',
+                    title: 'Concept Checkpoint',
+                    text: 'Please answer the concept checkpoint first!',
+                });
+            }
+            else if (openEndedConcept) {
+                Swal.fire({
+                    icon: 'info',
+                    title: 'Did you read?',
+                    text: 'Did you read the directions and checked with your instructor that you did it right?',
+                    confirmButtonText: 'Yes I did!',
+                    showCancelButton: true,
+                    cancelButtonText: 'No, I did not...'
+            
+                }).then((result) => {
+                    if (result.isConfirmed) {
+                        // Make sure we are not on the last page
+                        if (currentPage < maxPages) {
+                            // Change to new page
+                            changePage(currentPage + 1, false);
+                        }
+                    } else {
+                        // Nothing
+                    }
+                })
+            }
+        }
+    });
+
+    // Detect when the back button was pressed to set the proper page
+    //// https://stackoverflow.com/questions/34736430/can-we-detect-browsers-refresh-and-back-button-events/34736472
+    window.addEventListener('popstate', function (event) {
+        var getSearch = window.location.search;
+        var getParams = new URLSearchParams(getSearch);
+        var newPage = parseInt(getParams.get('page'));
+        changePage(newPage, true);
+    });
+
+} // end firstun
+
+// Function to change page based on parameter added
+//// "ignoreHistory" variable so a new state isn't created from a "popstate" evetnt
+function changePage(newPage, ignoreHistory) {
+    // Scroll back to the top of the screen
+    window.scrollTo(0, 0);
+
+    pages[currentPage].style.display = "none";
+
+    currentPage = newPage;
+
+    pages[currentPage].style.display = "block";
+    pages[currentPage].style.position = "static"; // "Static" so that the page is where it's supposed to be in the page
+
+    // Add an event listener to the "answer" button (if exists)
+    var answerButton = pages[currentPage].querySelector("#answer");
+    if (answerButton != null) {
+        answerButton.onclick = checkAnswer;
+    }
+
+    // Add an event listener to the "respond" button (if exists)
+    var respondButton = pages[currentPage].querySelector("#respond");
+    if (respondButton != null) {
+        respondButton.onclick = submitResponse;
+    }
+
+    // Add an event listener to the "See Answer" button (if exists).
+    //// This is for open-ended checkpoints (for instructors) example challenges, actual challenges (for instructors), and finals (for instructors).
+    var seeAnswerButton = pages[currentPage].querySelector("#seeAnswer");
+    if (seeAnswerButton != null) {
+        seeAnswerButton.onclick = showAnswer;
+    }
+
+    textToSpeech();
+
+
+    // Update the pagination
+    updatePagination();
+
+    // Only update the history if a button was pressed
+    if (ignoreHistory == false){
+        // Update the URL with the new page number
+        var getSearch = window.location.search;
+        var getParams = new URLSearchParams(getSearch);
+        //// Inspired from: https://www.30secondsofcode.org/articles/s/javascript-modify-url-without-reload
+        var projectID = parseInt(getParams.get('project'));
+        var sectionID = parseInt(getParams.get('id'));
+
+        var nextURL = "https://portal.mycodecentral.com/worksheets/pages/pages.php?project=" + projectID + "&id=" + sectionID + "&page=" + currentPage;
+        var nextTitle = document.getElementsByTagName("title")[0].innerHTML; // https://stackoverflow.com/questions/9228947/how-to-get-current-html-page-title-with-javascript
+        var nextState = { additionalInformation: 'Moved to new page'};
+
+        // This will create a new entry in the browser's history, without reloading
+        window.history.pushState(nextState, nextTitle, nextURL);
+
+        // This will replace the current entry in the browser's history, without reloading
+        window.history.replaceState(nextState, nextTitle, nextURL);
+    }
+}
+
+// Function for returning users to the section page
+function sectionReturn() {
+    // Get the project ID so we can return
+    var getSearch = window.location.search;
+    var getParams = new URLSearchParams(getSearch);
+    //// Inspired from: https://www.30secondsofcode.org/articles/s/javascript-modify-url-without-reload
+    var projectID = parseInt(getParams.get('project'));
+
+    // Go to the section page if there was a project ID (if there wasn't then that probably means that we're already on the section page)
+    if (projectID) {
+        window.location.href = "https://portal.mycodecentral.com/worksheets/index.php?id=" + projectID;
+    }
+} // End of returnSection()
+
+// Function for activating "Text to Speech" to the current page on the screen
+function textToSpeech() {
+    // Check if the page is a challenge page or not (challenge pages will have slightly different logic due to a more stabdardized template)
+    if (pages[currentPage].querySelector("#challengeCard") == null && pages[currentPage].querySelector("#ConceptCheckpoint") == null) {
+        // Setup a "Text-To-Speech" option next to the first paragraph and then leading to an image
+        //// (An image is always separated into it's own paragraph tag, making it easier to locate)
+        var wordPars = pages[currentPage].querySelectorAll("p");
+        let speech = []; // A fresh array for a fresh page
+        var currentIndex = 0; // To keep track of where we are in the array of speech options
+        var newText = true; // Flag variable to track when to add a new <span> tag with the playable thing
+        var alreadyDone = false; // Flag variable to prevent further text spans being added
+        wordPars.forEach(function(par) {
+            // Don't let the loop continue if the first tag was a speech span
+            if (par.querySelector(".speech") != null) {
+                alreadyDone = true; // This stays this way until the function is called again
+            }
+
+            // Don't run any code if there's already a .speech span, the only text is &nbsp; and spaces, or if there are <br> tags
+            var innerWords = par.innerHTML.replace("&nbsp;", "") // Remove &nbsp;
+            innerWords = innerWords.replace(/\s/g, '').length; // Regular expression to remove white spaces from the string (if 0, then there's nothing here)
+            if (alreadyDone == false && innerWords != 0 && par.querySelector("br") == null) {
+                // Don't run any code if there's already a .speech span or if the only text is &nbsp; and spaces
+                var innerWords = par.innerHTML.replace("&nbsp;", "") // Remove &nbsp;
+                innerWords = innerWords.replace(/\s/g, '').length; // Regular expression to remove white spaces from the string (if 0, then there's nothing here)
+                // Check if this is the first paragraph, if it is then insert a Span Tag and a new button to synthesize speech
+                if (newText) {
+                    // Insert a Span Tag and a new button to synthesize speech
+                    par.innerHTML = "<span id='speechSpan" + currentIndex.toString() + "' class='speech far fa-play-circle'></span> " + par.innerHTML;
+
+                    // Initialize the speech
+                    speech.push(new SpeechSynthesisUtterance());
+                    speech[currentIndex].text = "";
+                    speech[currentIndex].rate = 0.75;
+
+                    // Set the onlick listener to play the text (inner function neded because "speech" doesn't exist out of this function so we need those words from here)
+                    pages[currentPage].querySelector("#speechSpan" + currentIndex.toString()).onclick = function() { 
+                        // Get current index of this span (I have concerns that the index of the array won't be saved otherwise)
+                        var thisIndex = this.id.replace("speechSpan", "");
+
+                        // Play some text
+                        startSpeech(this, speech[thisIndex]);
+                    };
+
+                    newText = false;
+                }
+
+                // Check to make sure the paragraph doesn't have an <img> tag in it and it's not a blank space or a <br> tag
+                if (par.querySelector("br") == null && par.querySelector("img") == null && par.innerHTML != "&nbsp;" && par.innerHTML != "") {
+                    // Append the new text to the current index
+                    speech[currentIndex].text += par.innerHTML.replace("&nbsp;", "");
+                }
+
+                // Check if an image (if so then we've reached the end of this paragraph and we move on to the next)
+                if (par.querySelector("img") != null) {
+                    // Append the "alt" text to the array and mark the next paragraph to be a new speach object
+                    speech[currentIndex].text += par.querySelector("img").alt;
+                    newText = true;
+                    // Increase the current index for the next iteration
+                    currentIndex++;
+                }
+            }
+        });
+    }
+    // Modified/simplified logic for challenge cards
+    else if (pages[currentPage].querySelector("#challengeCard") != null) {
+        // Setup "Text-To-Speech" options
+        var wordChallenge = document.getElementById("challengeCard"); // Challenge words
+        let speechChallenge = new SpeechSynthesisUtterance(); // Object for speaking the challenge
+        var wordRequirements = document.getElementById("challenges"); // Challenge requirement words
+        let speechRequirements = new SpeechSynthesisUtterance(); // Object for speaking the challenge requirements
+
+        // Don't run the code if the first tag was a speech span
+        if (wordChallenge.querySelector(".speech") == null) {
+            // Add the span tag and initialize the challenge requirements
+            wordChallenge.innerHTML = "<span id='speechSpan0' class='far fa-play-circle speech'></span> " + wordChallenge.innerHTML;
+            speechChallenge.text = wordChallenge.innerHTML.replace("&nbsp;", "");
+            speechChallenge.rate = 0.75;
+            // Set the onlick listener to play the text
+            pages[currentPage].querySelector("#speechSpan0").onclick = function() {
+                //window.speechSynthesis.speak(speechChallenge);
+                startSpeech(this, speechChallenge);
+            };
+
+            // Repeat for the challenge requirements
+            wordRequirements.innerHTML = "<span id='speechSpan1' class='far fa-play-circle speech'></span> " + wordRequirements.innerHTML;
+            speechRequirements.text = wordRequirements.innerHTML.replace("&nbsp;", "");
+            speechRequirements.rate = 0.75;
+            // Set the onlick listener to play the text
+            pages[currentPage].querySelector("#speechSpan1").onclick = function() {
+                //window.speechSynthesis.speak(speechRequirements);
+                startSpeech(this, speechRequirements);
+            };
+        }
+    }
+    // Modified/simplified logic for the Multiple Choice Checkpoints
+    else if (pages[currentPage].querySelector("#ConceptCheckpoint") != null) {
+        // Get all radio containers with answer options
+        var answerOptions = pages[currentPage].getElementsByClassName("radiocontainer");
+
+        // Loop through each and assign a speach span
+        let speech = []; // A fresh array for a fresh page
+        for (var i = 0; i < answerOptions.length; i++) {
+            // Don't let the loop continue if the first tag was a speech span
+            if (answerOptions[i].querySelector(".speech") == null) {
+                // Add the span tag
+                answerOptions[i].innerHTML = "<span id='speechSpan" + i + "' class='speech far fa-play-circle'></span> " + answerOptions[i].innerHTML;
+
+                // Create the new speech object
+                speech.push(new SpeechSynthesisUtterance());
+                speech[i].rate = 0.75;
+
+                // Gather variables for the text to say
+                var textSay = answerOptions[i].querySelector("#text").innerHTML;
+                var imgSay = ""; // Just in case the image isn't there or there is no "alt" element
+                // Check if there is even an image
+                if (answerOptions[i].querySelector("#img").querySelector("img") != null) {
+                    // Check if the "alt" is set (there should be one, however, some images won't have one immediately)
+                    if (answerOptions[i].querySelector("#img").querySelector("img").alt != null) {
+                        imgSay = answerOptions[i].querySelector("#img").querySelector("img").alt;
+                    }
+                }
+                speech[i].text = textSay + imgSay;
+
+                // Set the onlick listener to play the text
+                pages[currentPage].querySelector("#speechSpan" + i.toString()).onclick = function() {
+                    // Get current index of this span (I have concerns that the index of the array won't be saved otherwise)
+                    var thisIndex = this.id.replace("speechSpan", "");
+
+                    //window.speechSynthesis.speak(speech[thisIndex]);
+                    startSpeech(this, speech[thisIndex]);
+                };
+            }
+        }
+    }
+} // End of textToSpeech()
+
+// Function for "text-to-speech" span to begin speaking
+function startSpeech(span, words) {
+    // Stop current talking to let the new one play
+    //window.speechSynthesis.cancel();
+
+    // Change the class to show the stop button
+    span.classList = 'speech far fa-stop-circle';
+
+    // Change the onclick to be a "stop" instead
+    span.onclick = function() {
+        stopSpeech(this, words);
+    }
+
+    // Say the words!
+    window.speechSynthesis.speak(words);
+} // End of startSpeech()
+
+// Function for "text-to-speech" span to stop speaking
+function stopSpeech(span, words) {
+    // Stop talking
+    window.speechSynthesis.cancel();
+
+    // Give the play button again
+    span.classList = 'speech far fa-play-circle';
+
+    // Reset the onclick
+    span.onclick = function() {
+        // Play some text
+        startSpeech(this, words);
+    };
+
+} // End of stopSpeech()
+
+// Function to update the pagination bar and
+//// Keep the appropriate pages always displaying
+function updatePagination() {
+    // Reload the pagination bar with all the new stuff
+
+    // Create pagination system
+    var pagination = document.getElementById("pagination");
+    var previousPage = document.getElementById("previousPage");
+
+    // Variable to convert the "currentPage" variable to correctly access the proper
+    //// pageNums element equivlent
+    activePage = currentPage;
+    document.getElementById("currentPageDisplay").innerHTML = activePage + 1;
+
+    // Create "Previous button"
+    pagination.innerHTML = "";
+    previousPage = activePage - 1;
+    // Do we need an elipsis?
+    //// It would happen if we have more pages on the worksheet then we have spaces for
+    if (pages.length > pagesToShow && currentPage - Math.floor(pagesToShow / 2) >= 0) {
+        // Create "paginated" numbers
+        var morePagesToGoForward = true;
+        var morePagesToGoBackward = true;
+
+        // Update the "activePage" variable
+        activePage = Math.floor(pagesToShow / 2);
+
+        // Check if we have more pages ahead of us
+        if (currentPage + Math.floor(pagesToShow / 2) >= pages.length - 1) {
+            morePagesToGoForward = false;
+        }
+        // Check if we have more pages behind us
+        if (currentPage - Math.floor(pagesToShow / 2) < 0) {
+            morePagesToGoBackward = false;
+        }
+
+        // Display some elipsis if there are more pages behind us:
+        // if (morePagesToGoBackward) {
+        //     pagination.innerHTML += "<p>...</p>";
+        // }
+
+        // Figure out how far max we can go
+        var firstPageToShow;
+        var finalPageToShow;
+
+        if (currentPage + Math.floor(pagesToShow / 2) < pages.length) {
+            finalPageToShow = currentPage + Math.ceil(pagesToShow / 2);
+
+            firstPageToShow = currentPage - Math.floor(pagesToShow / 2);
+        } else {
+            finalPageToShow = pages.length;
+
+            firstPageToShow = pages.length - pagesToShow;
+
+            activePage = pagesToShow - (pages.length - currentPage);
+        }
+        for (var i = firstPageToShow; i < finalPageToShow; i++) {
+            pagination.innerHTML += "<p class='singlePage'>" + (i + 1) + "</p>";
+        }
+
+        // Create array to hold all current page elements
+        pageNums = document.getElementsByClassName("singlePage");
+
+        // Display some elipsis if there are more pages to go:
+        // if (morePagesToGoForward) {
+        //     pagination.innerHTML += "<p>...</p>";
+        // }
+    }
+    // Create the pages as normal
+    else {
+        var morePagesToGoForward = true;
+
+        // Check if we are in the middle of the screen
+        if (currentPage + Math.ceil(pagesToShow / 2) > pages.length) {
+            finalPageToShow = pages.length;
+        }
+        else {
+            // Set final page either the max pages allowed or the max amount of pages in the sheet
+            //// Whichever is smaller
+            finalPageToShow = pages.length >= pagesToShow ? pagesToShow : pages.length;
+        }
+
+        for (var i = 0; i < finalPageToShow; i++) {
+            pagination.innerHTML += "<p class='singlePage'>" + (i + 1) + "</p>";
+        }
+
+        // Create array to hold all current page elements
+        pageNums = document.getElementsByClassName("singlePage");
+
+        // Display some elipsis if there are more pages to go:
+        // if (morePagesToGoForward) {
+        //     pagination.innerHTML += "<p>...</p>";
+        // }
+    }
+
+    // Create "Next" button
+
+    //pagination.innerHTML += "<button id='next' class='btn btn-primary text-center'>Next Page </button>";
+
+    // Set the active class
+    pageNums[activePage].classList.add("activePage");
+
+    // Event handler for when the "singlePage" button is pressed
+    /* No longer want this to allow students to jump ahead
+    for (var i = 0; i < pageNums.length; i++) {
+        let clickedI = i;
+        pageNums[i].addEventListener("click", function () {
+            // Make sure that if there is a concept checkpoint that they answer it first
+            //// (This id to try and limit the students who may try and cheat if they don't know the answer)
+            var conceptDone;
+            var afterCheckpoint = pages[currentPage].querySelector("#AfterCheckpoint");
+            if (afterCheckpoint != null && window.getComputedStyle(afterCheckpoint).getPropertyValue("display") == "none") {
+                conceptDone = false;
+            } else {
+                conceptDone = true;
+            }
+
+            var openEndedConcept = false;
+            if (pages[currentPage].getAttribute("data-open") == "yes") {
+                openEndedConcept = true;
+            }
+
+            if (conceptDone && !openEndedConcept) {
+
+                // Change the page
+                changePage(pageNums[clickedI].innerHTML - 1, false);
+
+            }
+            else if (!conceptDone) {
+                Swal.fire({
+                    icon: 'info',
+                    title: 'Concept Checkpoint',
+                    text: 'Please answer the concept checkpoint first!',
+                });
+            }
+            else if (openEndedConcept) {
+                Swal.fire({
+                    icon: 'info',
+                    title: 'Did you read?',
+                    text: 'Did you read the directions and checked with your instructor that you did it right?',
+                    confirmButtonText: 'Yes I did!',
+                    showCancelButton: true,
+                    cancelButtonText: 'No, I did not...'
+            
+                }).then((result) => {
+                    if (result.isConfirmed) {
+                        // Change the page
+                        changePage(pageNums[clickedI].innerHTML - 1, false);
+                    } else {
+                        // NOthing
+                    }
+                })
+            }
+        });
+    }
+    */
+} // end updatePagination
+
+function studentFinished(worksheetID, sectionID) {
+    // Prepare parameters to save work
+    var params = new FormData();
+    params.append('worksheetID', worksheetID);
+    params.append('sectionID', sectionID);
+    params.append('page', currentPage);
+
+    // Prepare call
+    var xhrSave = new XMLHttpRequest();
+    xhrSave.open('POST', 'assets/saveProgress.php', true);
+    xhrSave.onload = function() {
+        if (this.response == "success") {
+            Swal.fire({
+                icon: 'success',
+                title: 'Awesome!',
+                html: "Your work has been saved successfully!",
+                confirmButtonText: 'Epic!',
+                confirmButtonAriaLabel: 'Thumbs up, great!',
+            });
+        }
+        else {
+            Swal.fire({
+                icon: 'error',
+                title: 'Oh no! Something went wrong!',
+                text: 'Reload the page, come back to page ' + (currentPage+1)+ ' and try again!',
+            });
+        }
+    };
+
+    // Send the call
+    xhrSave.send(params);
+}
+
+// Function to go through all pages and populate with questions
+//// (this is needed because Javascript populates in a way that doesn't have the correct answer be marked as false... Like the way PHP did)
+function getQuestions() {
+    // Loop through all pages
+    for (var x = 0; x < pages.length; x++) {
+        // Get the answer button variable back
+        answerButton = pages[x].querySelector("#answer");
+        // Check all possible answers and see if any were clicked
+        answerPicked = false;
+        answerChoices = document.getElementsByName("checkpoint");
+
+        // Only loop through for the pages with the questions
+        if (answerButton != null) {
+            // Prepare parameters to check if answer is correct
+            var params = new FormData();
+            params.append('questionCheckID', answerButton.closest(".Page").getAttribute("data-questionid"));
+            params.append('pageNumber', x);
+            params.append('isStaff', isStaff);
+
+            // Prepare the call to the server to check answer
+            var xhrAnswer = new XMLHttpRequest();
+            xhrAnswer.open('POST', 'assets/getQuestion.php', true);
+            xhrAnswer.onload = function() {
+                // Parse response
+                response = JSON.parse(this.response);
+
+                // Re-randomize question options based on the newly returned random question responses (if incorrect)
+                //// Or display the questions in the normal order if the question was answered correctly
+                var previousX = response["pageNumber"];
+                var aAnswerTxt = pages[previousX].querySelector(".A .answerText");
+                var aAnswerImg = pages[previousX].querySelector(".A .answerImg img");
+                var aAnswerVal = pages[previousX].querySelector(".A .answerOption");
+
+                var bAnswerTxt = pages[previousX].querySelector(".B .answerText");
+                var bAnswerImg = pages[previousX].querySelector(".B .answerImg img");
+                var bAnswerVal = pages[previousX].querySelector(".B .answerOption");
+
+                var cAnswerTxt = pages[previousX].querySelector(".C .answerText");
+                var cAnswerImg = pages[previousX].querySelector(".C .answerImg img");
+                var cAnswerVal = pages[previousX].querySelector(".C .answerOption");
+
+                var dAnswerTxt = pages[previousX].querySelector(".D .answerText");
+                var dAnswerImg = pages[previousX].querySelector(".D .answerImg img");
+                var dAnswerVal = pages[previousX].querySelector(".D .answerOption");
+
+                // Update the texts and options (also deselecting the option that was picked)
+                var newValue = response["answerA"].replace("â€˜", "'");
+                newValue = newValue.replace("â€™", "'");
+                aAnswerTxt.innerHTML = newValue;
+
+                // Check if option value should be the answer text or the answer image
+                if (response["answerAImg"] != "") {
+                    aAnswerVal.value = response["answerAImg"];
+                }
+                else {
+                    aAnswerVal.value = response["answerA"];
+                }
+                aAnswerVal.checked = false;
+
+                newValue = response["answerB"].replace("â€˜", "'");
+                newValue = newValue.replace("â€™", "'");
+                bAnswerTxt.innerHTML = newValue;
+
+                // Check if option value should be the answer text or the answer image
+                if (response["answerBImg"] != "") {
+                    bAnswerVal.value = response["answerBImg"];
+                }
+                else {
+                    bAnswerVal.value = response["answerB"];
+                }
+                bAnswerVal.checked = false;
+
+                newValue = response["answerC"].replace("â€˜", "'");
+                newValue = newValue.replace("â€™", "'");
+                cAnswerTxt.innerHTML = newValue;
+
+                // Check if option value should be the answer text or the answer image
+                if (response["answerCImg"] != "") {
+                    cAnswerVal.value = response["answerCImg"];
+                }
+                else {
+                    cAnswerVal.value = response["answerC"];
+                }
+                cAnswerVal.checked = false;
+
+                newValue = response["answerD"].replace("â€˜", "'");
+                newValue = newValue.replace("â€™", "'");
+                dAnswerTxt.innerHTML = newValue;
+                
+                // Check if option value should be the answer text or the answer image
+                if (response["answerDImg"] != "") {
+                    dAnswerVal.value = response["answerDImg"];
+                }
+                else {
+                    dAnswerVal.value = response["answerD"];
+                }
+                dAnswerVal.checked = false;
+
+                // Update the images (if the image tags were generated)
+                if (aAnswerImg != null) {
+                    var lucSrc = "../../luc/worksheet_images/";
+                    aAnswerImg.src = lucSrc + response["answerAImg"];
+                    bAnswerImg.src = lucSrc + response["answerBImg"];
+                    cAnswerImg.src = lucSrc + response["answerCImg"];
+                    dAnswerImg.src = lucSrc + response["answerDImg"];
+                }
+
+                // Update the fields based on new answered question
+                updateStuff(response["pointsWorth"], response["attempts"], response["correct"], response["pageNumber"]);
+            };
+
+            // Send the call
+            xhrAnswer.send(params);
+        }
+    }
+} // end getQuestions
+
+function checkAnswer() {
+    // Get the answer button variable back
+    answerButton = pages[currentPage].querySelector("#answer");
+    // Check all possible answers and see if any were clicked
+    answerPicked = false;
+    answerChoices = document.getElementsByName("checkpoint");
+    for (var i = 0; i < answerChoices.length; i++) {
+        if (answerChoices[i].checked && answerButton.closest(".Page").getAttribute("data-page") == answerChoices[i].closest(".Page").getAttribute("data-page")) {
+            // Prepare parameters to check if answer is correct
+            var params = new FormData();
+            params.append('questionCheckID', answerButton.closest(".Page").getAttribute("data-questionid"));
+            params.append('answerChoice', answerChoices[i].value);
+            params.append('isStaff', isStaff);
+
+            // Prepare the call to the server to check answer
+            var xhrAnswer = new XMLHttpRequest();
+            xhrAnswer.open('POST', 'assets/checkAnswer.php', true);
+            xhrAnswer.onload = function() {
+                // Parse response
+                response = JSON.parse(this.response);
+
+                // Show message for correct or incorrect
+                if (response['correct'] == true) {
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Congrats!',
+                        text: 'Epic Job! You earned ' + response['pointsEarned'] + ' points!',
+                    });
+
+                    // Show the "AfterCheckpoint" DIV so the student can move on
+                    pages[currentPage].querySelector("#AfterCheckpoint").style.display = "block";
+                }
+                else {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Oh no!',
+                        text: 'Uh-oh! Better luck next time.',
+                    });
+                }
+
+                // Re-randomize question options based on the newly returned random question responses (if incorrect)
+                //// Or display the questions in the normal order if the question was answered correctly
+                var aAnswerTxt = pages[currentPage].querySelector(".A .answerText");
+                var aAnswerImg = pages[currentPage].querySelector(".A .answerImg img");
+                var aAnswerVal = pages[currentPage].querySelector(".A .answerOption");
+
+                var bAnswerTxt = pages[currentPage].querySelector(".B .answerText");
+                var bAnswerImg = pages[currentPage].querySelector(".B .answerImg img");
+                var bAnswerVal = pages[currentPage].querySelector(".B .answerOption");
+
+                var cAnswerTxt = pages[currentPage].querySelector(".C .answerText");
+                var cAnswerImg = pages[currentPage].querySelector(".C .answerImg img");
+                var cAnswerVal = pages[currentPage].querySelector(".C .answerOption");
+
+                var dAnswerTxt = pages[currentPage].querySelector(".D .answerText");
+                var dAnswerImg = pages[currentPage].querySelector(".D .answerImg img");
+                var dAnswerVal = pages[currentPage].querySelector(".D .answerOption");
+
+                // Update the texts and options (also deselecting the option that was picked)
+                var newValue = response["answerA"].replace("â€˜", "'");
+                newValue = newValue.replace("â€™", "'");
+                aAnswerTxt.innerHTML = newValue;
+
+                // Check if option value should be the answer text or the answer image
+                if (response["answerAImg"] != "") {
+                    aAnswerVal.value = response["answerAImg"];
+                }
+                else {
+                    aAnswerVal.value = response["answerA"];
+                }
+                aAnswerVal.checked = false;
+
+                newValue = response["answerB"].replace("â€˜", "'");
+                newValue = newValue.replace("â€™", "'");
+                bAnswerTxt.innerHTML = newValue;
+
+                // Check if option value should be the answer text or the answer image
+                if (response["answerBImg"] != "") {
+                    bAnswerVal.value = response["answerBImg"];
+                }
+                else {
+                    bAnswerVal.value = response["answerB"];
+                }
+                bAnswerVal.checked = false;
+
+                newValue = response["answerC"].replace("â€˜", "'");
+                newValue = newValue.replace("â€™", "'");
+                cAnswerTxt.innerHTML = newValue;
+
+                // Check if option value should be the answer text or the answer image
+                if (response["answerCImg"] != "") {
+                    cAnswerVal.value = response["answerCImg"];
+                }
+                else {
+                    cAnswerVal.value = response["answerC"];
+                }
+                cAnswerVal.checked = false;
+
+                newValue = response["answerD"].replace("â€˜", "'");
+                newValue = newValue.replace("â€™", "'");
+                dAnswerTxt.innerHTML = newValue;
+                
+                // Check if option value should be the answer text or the answer image
+                if (response["answerDImg"] != "") {
+                    dAnswerVal.value = response["answerDImg"];
+                }
+                else {
+                    dAnswerVal.value = response["answerD"];
+                }
+                dAnswerVal.checked = false;
+
+                // Update the images (if the image tags were generated)
+                if (aAnswerImg != null) {
+                    var lucSrc = "../../luc/worksheet_images/";
+                    aAnswerImg.src = lucSrc + response["answerAImg"];
+                    bAnswerImg.src = lucSrc + response["answerBImg"];
+                    cAnswerImg.src = lucSrc + response["answerCImg"];
+                    dAnswerImg.src = lucSrc + response["answerDImg"];
+                }
+
+                // Update "sessionPoints" if points were earned
+                //sessionPoints += response['pointsEarned'];
+
+                // Update the fields based on new answered question
+                updateStuff(response["pointsWorth"], response["attempts"], response["correct"], currentPage);
+            };
+
+            // Send the call
+            xhrAnswer.send(params);
+
+            answerPicked = true;
+        }
+    }
+    // Student didn't pick an answer
+    if (!answerPicked) {
+        Swal.fire({
+            icon: 'info',
+            title: 'No Answer Selected!',
+            text: 'Please choose an answer first...',
+        });
+    }
+} // end checkAnswer
+
+function showAnswer() {
+    // Get the answer tag of the current page
+    var seeAnswerButton = pages[currentPage].querySelector("#answerContent");
+
+    // Display it
+    seeAnswerButton.style.display = "block";
+} // end showAnswer
+
+function updateStuff(pointsWorth, attempts, isCorrect, thePage) {
+
+    // Find our elements
+    answerButtonSpan = pages[thePage].querySelector("#answerButtonSpan");
+    badgeInfo = pages[thePage].querySelector("#badgeInfo");
+    optionChosen = pages[thePage].querySelector(".A"); // Because the right answer apears at the top
+    pointsWorthTag = pages[thePage].querySelector("#pointsWorth");
+    questionAttemptsTag = pages[thePage].querySelector("#questionAttempts");
+
+    // Either update or remove points worth tag depending if the answer is correct or not
+    if (isCorrect) {
+        // Make the button disappear
+        answerButtonSpan.innerHTML = "";
+
+        // Only show the attempts and remove the points worth
+        badgeInfo.innerHTML = "<span class='badge badge-primary mb-1' disabled>Question Attempt: <span id='questionAttempts'>" + attempts + "</span>";
+        
+        // Loop through the choices to find the checked one, because I can't find a more elegant solution...
+        optionChosen.style.backgroundColor = "#fed035";
+ 
+    }
+    else {
+        if (attempts >= 1) {
+            pointsWorth /= 2;
+        }
+        if (attempts >= 2) {
+            pointsWorth /= 2;
+        }
+        if (attempts >= 3) {
+            pointsWorth = 0;
+        }
+        pointsWorthTag.innerHTML  = pointsWorth;
+        questionAttemptsTag.innerHTML = attempts;
+    }
+} // end updateStuff
+
+// Function to submit user's response to the end of project essay questions
+function submitResponse() {
+    // Get the respond button
+    var respondButton = pages[currentPage].querySelector("#respond");
+
+    // Prepare parameters to submit the student's responses
+    var params = new FormData();
+
+    // ID for the question being responded to as well as the page it was found in
+    params.append('questionCheckID', respondButton.closest(".Page").getAttribute("data-questionid"));
+    params.append('pageID', respondButton.closest(".Page").getAttribute("data-pageid"));
+
+    // Get the answer values from the student
+    //// (But only from the questions that actually exist)
+    var response1Area = pages[currentPage].querySelector("#question1Response");
+    if (response1Area != null) {
+        // Add the response to the parameters to send
+        params.append("response1", response1Area.value)
+    }
+
+    var response2Area = pages[currentPage].querySelector("#question2Response");
+    if (response2Area != null) {
+        // Add the response to the parameters to send
+        params.append("response2", response2Area.value)
+    }
+
+    var response3Area = pages[currentPage].querySelector("#question3Response");
+    if (response3Area != null) {
+        // Add the response to the parameters to send
+        params.append("response3", response3Area.value)
+    }
+
+    var response4Area = pages[currentPage].querySelector("#question4Response");
+    if (response4Area != null) {
+        // Add the response to the parameters to send
+        params.append("response4", response4Area.value)
+    }
+
+    var response5Area = pages[currentPage].querySelector("#question5Response");
+    if (response5Area != null) {
+        // Add the response to the parameters to send
+        params.append("response5", response5Area.value)
+    }
+
+    // Prepare the call to the server to check answer
+    var xhrAnswer = new XMLHttpRequest();
+    xhrAnswer.open('POST', 'assets/submitResponse.php', true);
+    xhrAnswer.onload = function() {
+        // Check if the response was successful
+        if (this.response == 1) {
+            Swal.fire({
+                icon: 'success',
+                title: 'Submitted!',
+                text: 'Epic Job! Your responses have been submitted!',
+            });
+        }
+        else {
+            Swal.fire({
+                icon: 'error',
+                title: 'Oh no!',
+                text: 'Uh-oh! Something went wrong, please check with your instructor.',
+            });
+        }
+    }
+
+    // Send the request
+    xhrAnswer.send(params);
+} // end submitResponse
